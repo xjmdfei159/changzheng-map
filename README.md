@@ -7,7 +7,7 @@
 - 左右侧悬浮窗和详情面板
 
 ## 访问方式
-通过GitHub Pages访问：[https://您的用户名.github.io/changzheng-map/](https://您的用户名.github.io/changzheng-map/)
+通过GitHub Pages访问：[https://xjmdfei159.github.io/changzheng-map/](https://xjmdfei159.github.io/changzheng-map/)
 
 ## 使用说明
 1. 点击地图上的标记查看各节点信息
