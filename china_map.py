@@ -1155,40 +1155,45 @@ custom_js = '''
             const svgRect = svgElement.getBoundingClientRect();
             
             // 检查点击位置是否在SVG矩形内
-            if (x < svgRect.left || x > svgRect.right || y < svgRect.top || y > svgRect.bottom) {
+            if (x < svgRect.left - 10 || x > svgRect.right + 10 || y < svgRect.top - 10 || y > svgRect.bottom + 10) {
                 return false;
             }
             
-            // 获取SVG的CTM(Current Transformation Matrix)以将屏幕坐标转换为SVG坐标
-            const point = svgElement.createSVGPoint();
-            point.x = x;
-            point.y = y;
-            
-            // 获取SVG元素的坐标系中的点
-            const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
-            
-            // 使用isPointInStroke和isPointInFill来检测点是否在线上
-            const isInStroke = pathElement.isPointInStroke(transformedPoint);
-            const isInFill = pathElement.isPointInFill(transformedPoint);
-            
-            // 使用getPointAtLength进行更精确的检测
-            const pathLength = pathElement.getTotalLength();
-            
-            // 增加采样密度以提高检测精度
-            for (let i = 0; i <= pathLength; i += 1) {
-                const pathPoint = pathElement.getPointAtLength(i);
-                const distance = Math.sqrt(
-                    Math.pow(transformedPoint.x - pathPoint.x, 2) + 
-                    Math.pow(transformedPoint.y - pathPoint.y, 2)
-                );
+            try {
+                // 获取SVG的CTM(Current Transformation Matrix)以将屏幕坐标转换为SVG坐标
+                const point = svgElement.createSVGPoint();
+                point.x = x;
+                point.y = y;
                 
-                // 扩大检测范围以提高成功率
-                if (distance < 15) {
-                    return true;
+                // 获取SVG元素的坐标系中的点
+                const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                
+                // 使用isPointInStroke和isPointInFill来检测点是否在线上
+                const isInStroke = pathElement.isPointInStroke(transformedPoint);
+                const isInFill = pathElement.isPointInFill(transformedPoint);
+                
+                // 使用getPointAtLength进行更精确的检测
+                const pathLength = pathElement.getTotalLength();
+                
+                // 增加采样密度以提高检测精度
+                for (let i = 0; i <= pathLength; i += 1) {
+                    const pathPoint = pathElement.getPointAtLength(i);
+                    const distance = Math.sqrt(
+                        Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                        Math.pow(transformedPoint.y - pathPoint.y, 2)
+                    );
+                    
+                    // 扩大检测范围到20像素以提高成功率
+                    if (distance < 20) {
+                        return true;
+                    }
                 }
+                
+                return isInStroke || isInFill;
+            } catch (error) {
+                console.error('检测路径点出错:', error);
+                return false;
             }
-            
-            return isInStroke || isInFill;
         }
         
         // 找到小士兵所在的路径索引
@@ -1205,8 +1210,50 @@ custom_js = '''
             return -1;
         }
         
+        // 找到点在路径上的最近位置，并返回进度值(0-1)
+        function findClosestPointOnPath(x, y, pathElement) {
+            const svgElement = pathElement.closest('svg');
+            if (!svgElement) return -1;
+            
+            try {
+                const point = svgElement.createSVGPoint();
+                point.x = x;
+                point.y = y;
+                
+                const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                const pathLength = pathElement.getTotalLength();
+                
+                let minDistance = Infinity;
+                let closestPointIndex = 0;
+                
+                // 在路径上采样更多点以找到最近点
+                for (let i = 0; i <= pathLength; i += 5) {
+                    const pathPoint = pathElement.getPointAtLength(i);
+                    const distance = Math.sqrt(
+                        Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                        Math.pow(transformedPoint.y - pathPoint.y, 2)
+                    );
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestPointIndex = i;
+                    }
+                }
+                
+                // 只有当最近点足够近时才返回进度值
+                if (minDistance < 30) {
+                    return closestPointIndex / pathLength;
+                }
+                
+                return -1;
+            } catch (error) {
+                console.error('计算路径最近点出错:', error);
+                return -1;
+            }
+        }
+        
         // 沿路径移动小人
-    function moveAlongPath(pathIndex, duration = 20000) { // 减慢速度为20秒
+    function moveAlongPath(pathIndex, duration = 20000, startPosition = null) { // 减慢速度为20秒
         const paths = getPathElements();
         if (pathIndex < 0 || pathIndex >= paths.length) return;
         
@@ -1218,6 +1265,15 @@ custom_js = '''
         const pathLength = path.getTotalLength();
         let startTime = null;
         let currentProgress = 0; // 保存当前行走进度
+        
+        // 如果提供了起始位置（拖拽释放的位置），计算在路径上的进度
+        if (startPosition) {
+            const progress = findClosestPointOnPath(startPosition.x, startPosition.y, path);
+            if (progress >= 0) {
+                currentProgress = progress;
+                console.log('从拖拽位置开始移动，进度:', currentProgress);
+            }
+        }
         
         function move(timestamp) {
             if (!startTime) startTime = timestamp;
@@ -1239,18 +1295,31 @@ custom_js = '''
                 if (svgElement) {
                     const svgRect = svgElement.getBoundingClientRect();
                     
-                    // 计算小人在地图中的绝对位置（不受地图拖拽影响）
+                    // 修复计算逻辑，确保小人准确沿着路线行走
                     const mapX = point.x + svgRect.left - mapRect.left - 20; // 减去小人宽度的一半使其居中
-                    const mapY = point.y + svgRect.top - mapRect.top - 30; // 减去小人高度使其脚踩在线上
+                    const mapY = point.y + svgRect.top - mapRect.top - 28; // 调整垂直位置，确保脚踩在线上
+                    
+                    // 确保位置在合理范围内，防止小人消失
+                    const containerWidth = mapContainer.offsetWidth;
+                    const containerHeight = mapContainer.offsetHeight;
+                    const soldierWidth = 40;
+                    const soldierHeight = 60;
+                    
+                    // 限制小人在地图容器内
+                    const safeX = Math.max(0, Math.min(mapX, containerWidth - soldierWidth));
+                    const safeY = Math.max(0, Math.min(mapY, containerHeight - soldierHeight));
                     
                     // 设置小人位置（相对于地图容器）
                     soldier.style.position = 'absolute';
-                    soldier.style.left = mapX + 'px';
-                    soldier.style.top = mapY + 'px';
+                    soldier.style.left = safeX + 'px';
+                    soldier.style.top = safeY + 'px';
                     soldier.style.bottom = 'auto';
                     
                     // 确保小人始终显示在地图上方
                     soldier.style.zIndex = '999';
+                    
+                    // 确保小人元素是可见的
+                    soldier.style.display = 'block';
                 }
                 
                 // 确保动画持续进行
@@ -1268,6 +1337,15 @@ custom_js = '''
                 // 移动到下一站
                 currentNodeIndex = Math.min(currentNodeIndex + 1, totalNodes - 1);
                 updateProgress(currentNodeIndex);
+                
+                // 检查是否到达终点
+                if (currentNodeIndex >= totalNodes - 1) {
+                    // 延迟3秒后返回界面左下方
+                    setTimeout(() => {
+                        // 重置位置到界面左下方
+                        resetSoldierPosition();
+                    }, 3000);
+                }
             }
         }
         
@@ -1280,6 +1358,35 @@ custom_js = '''
             move(Date.now());
         }
         console.log('开始沿路径移动小人，路径索引:', pathIndex);
+    }
+    
+    // 重置小人到界面左下方
+    function resetSoldierPosition() {
+        // 确保地图容器存在
+        const mapContainer = document.querySelector('.map-container, .folium-map') || document.querySelector('.folium-map');
+        if (!mapContainer) {
+            console.error('地图容器未找到');
+            return;
+        }
+        
+        // 停止任何行走动画
+        isWalking = false;
+        soldier.classList.remove('walking');
+        
+        // 重置到界面左下方，使用相对定位以避免受到地图缩放影响
+        soldier.style.position = 'absolute';
+        soldier.style.left = '60px';
+        soldier.style.bottom = '60px';
+        soldier.style.top = 'auto';
+        
+        // 确保小人可见
+        soldier.style.zIndex = '999';
+        soldier.style.display = 'block';
+        
+        // 重置路径索引
+        pathIndex = -1;
+        
+        console.log('小人已重置到界面左下方');
     }
         
         // 鼠标按下事件
@@ -1327,17 +1434,96 @@ custom_js = '''
                 isDragging = false;
                 soldier.classList.remove('dragging');
                 
-                // 检查是否在路线上
+                // 获取小人中心点坐标
                 const rect = soldier.getBoundingClientRect();
                 const x = rect.left + rect.width / 2;
                 const y = rect.top + rect.height / 2;
-                const newPathIndex = findPathIndex(x, y);
                 
-                if (newPathIndex !== -1 && newPathIndex !== pathIndex) {
-                    pathIndex = newPathIndex;
-                    // 沿路线移动
-                    moveAlongPath(pathIndex);
-                    playSoundEffect();
+                // 寻找所有路径中最近的点，无论是否在路径上
+                let closestPathIndex = -1;
+                let closestProgress = -1;
+                let minDistance = Infinity;
+                const paths = getPathElements();
+                
+                // 遍历所有路径找到最近的点
+                for (let i = 0; i < paths.length; i++) {
+                    const path = paths[i];
+                    const svgElement = path.closest('svg');
+                    if (!svgElement) continue;
+                    
+                    try {
+                        const point = svgElement.createSVGPoint();
+                        point.x = x;
+                        point.y = y;
+                        
+                        const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                        const pathLength = path.getTotalLength();
+                        let pathMinDistance = Infinity;
+                        let closestPointIndex = 0;
+                        
+                        // 在路径上采样更多点以找到最近点
+                        for (let j = 0; j <= pathLength; j += 2) { // 增加采样密度
+                            const pathPoint = path.getPointAtLength(j);
+                            const distance = Math.sqrt(
+                                Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                                Math.pow(transformedPoint.y - pathPoint.y, 2)
+                            );
+                            
+                            if (distance < pathMinDistance) {
+                                pathMinDistance = distance;
+                                closestPointIndex = j;
+                            }
+                        }
+                        
+                        // 找到此路径上的最近点
+                        if (pathMinDistance < minDistance) {
+                            minDistance = pathMinDistance;
+                            closestPathIndex = i;
+                            closestProgress = closestPointIndex / pathLength;
+                        }
+                    } catch (error) {
+                        console.error('计算路径最近点出错:', error);
+                    }
+                }
+                
+                // 如果找到足够近的路径（距离阈值设为60像素）
+                if (closestPathIndex !== -1 && minDistance < 60) {
+                    pathIndex = closestPathIndex;
+                    
+                    // 获取对应的路径元素
+                    const path = paths[pathIndex];
+                    
+                    // 将小人位置转换为相对于地图容器的坐标
+                    const mapContainer = document.querySelector('.map-container, .folium-map') || document.querySelector('.folium-map');
+                    if (mapContainer) {
+                        const mapRect = mapContainer.getBoundingClientRect();
+                        const svgElement = path.closest('svg');
+                        
+                        if (svgElement) {
+                            const svgRect = svgElement.getBoundingClientRect();
+                            
+                            // 立即将小人定位到路径上的精确位置
+                            const point = path.getPointAtLength(closestProgress * path.getTotalLength());
+                            const mapX = point.x + svgRect.left - mapRect.left - 20;
+                            const mapY = point.y + svgRect.top - mapRect.top - 28;
+                            
+                            // 设置位置
+                            soldier.style.position = 'absolute';
+                            soldier.style.left = mapX + 'px';
+                            soldier.style.top = mapY + 'px';
+                            soldier.style.bottom = 'auto';
+                            soldier.style.zIndex = '999';
+                            soldier.style.display = 'block';
+                            
+                            // 从该位置开始沿路径移动
+                            moveAlongPath(pathIndex, 20000, {x: mapX + 20, y: mapY + 28});
+                            playSoundEffect();
+                        }
+                    }
+                } else {
+                    // 如果不在任何路线附近，确保小人不会消失
+                    soldier.style.display = 'block';
+                    soldier.style.zIndex = '999';
                 }
             }
         });

@@ -18,7 +18,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_7ec2be21692b6299b6279b416c2e10f5 {
+                #map_1847de95be0bd1ebe87a3dd0366aead5 {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -927,40 +927,45 @@
             const svgRect = svgElement.getBoundingClientRect();
             
             // 检查点击位置是否在SVG矩形内
-            if (x < svgRect.left || x > svgRect.right || y < svgRect.top || y > svgRect.bottom) {
+            if (x < svgRect.left - 10 || x > svgRect.right + 10 || y < svgRect.top - 10 || y > svgRect.bottom + 10) {
                 return false;
             }
             
-            // 获取SVG的CTM(Current Transformation Matrix)以将屏幕坐标转换为SVG坐标
-            const point = svgElement.createSVGPoint();
-            point.x = x;
-            point.y = y;
-            
-            // 获取SVG元素的坐标系中的点
-            const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
-            
-            // 使用isPointInStroke和isPointInFill来检测点是否在线上
-            const isInStroke = pathElement.isPointInStroke(transformedPoint);
-            const isInFill = pathElement.isPointInFill(transformedPoint);
-            
-            // 使用getPointAtLength进行更精确的检测
-            const pathLength = pathElement.getTotalLength();
-            
-            // 增加采样密度以提高检测精度
-            for (let i = 0; i <= pathLength; i += 1) {
-                const pathPoint = pathElement.getPointAtLength(i);
-                const distance = Math.sqrt(
-                    Math.pow(transformedPoint.x - pathPoint.x, 2) + 
-                    Math.pow(transformedPoint.y - pathPoint.y, 2)
-                );
+            try {
+                // 获取SVG的CTM(Current Transformation Matrix)以将屏幕坐标转换为SVG坐标
+                const point = svgElement.createSVGPoint();
+                point.x = x;
+                point.y = y;
                 
-                // 扩大检测范围以提高成功率
-                if (distance < 15) {
-                    return true;
+                // 获取SVG元素的坐标系中的点
+                const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                
+                // 使用isPointInStroke和isPointInFill来检测点是否在线上
+                const isInStroke = pathElement.isPointInStroke(transformedPoint);
+                const isInFill = pathElement.isPointInFill(transformedPoint);
+                
+                // 使用getPointAtLength进行更精确的检测
+                const pathLength = pathElement.getTotalLength();
+                
+                // 增加采样密度以提高检测精度
+                for (let i = 0; i <= pathLength; i += 1) {
+                    const pathPoint = pathElement.getPointAtLength(i);
+                    const distance = Math.sqrt(
+                        Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                        Math.pow(transformedPoint.y - pathPoint.y, 2)
+                    );
+                    
+                    // 扩大检测范围到20像素以提高成功率
+                    if (distance < 20) {
+                        return true;
+                    }
                 }
+                
+                return isInStroke || isInFill;
+            } catch (error) {
+                console.error('检测路径点出错:', error);
+                return false;
             }
-            
-            return isInStroke || isInFill;
         }
         
         // 找到小士兵所在的路径索引
@@ -977,8 +982,50 @@
             return -1;
         }
         
+        // 找到点在路径上的最近位置，并返回进度值(0-1)
+        function findClosestPointOnPath(x, y, pathElement) {
+            const svgElement = pathElement.closest('svg');
+            if (!svgElement) return -1;
+            
+            try {
+                const point = svgElement.createSVGPoint();
+                point.x = x;
+                point.y = y;
+                
+                const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                const pathLength = pathElement.getTotalLength();
+                
+                let minDistance = Infinity;
+                let closestPointIndex = 0;
+                
+                // 在路径上采样更多点以找到最近点
+                for (let i = 0; i <= pathLength; i += 5) {
+                    const pathPoint = pathElement.getPointAtLength(i);
+                    const distance = Math.sqrt(
+                        Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                        Math.pow(transformedPoint.y - pathPoint.y, 2)
+                    );
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestPointIndex = i;
+                    }
+                }
+                
+                // 只有当最近点足够近时才返回进度值
+                if (minDistance < 30) {
+                    return closestPointIndex / pathLength;
+                }
+                
+                return -1;
+            } catch (error) {
+                console.error('计算路径最近点出错:', error);
+                return -1;
+            }
+        }
+        
         // 沿路径移动小人
-    function moveAlongPath(pathIndex, duration = 20000) { // 减慢速度为20秒
+    function moveAlongPath(pathIndex, duration = 20000, startPosition = null) { // 减慢速度为20秒
         const paths = getPathElements();
         if (pathIndex < 0 || pathIndex >= paths.length) return;
         
@@ -990,6 +1037,15 @@
         const pathLength = path.getTotalLength();
         let startTime = null;
         let currentProgress = 0; // 保存当前行走进度
+        
+        // 如果提供了起始位置（拖拽释放的位置），计算在路径上的进度
+        if (startPosition) {
+            const progress = findClosestPointOnPath(startPosition.x, startPosition.y, path);
+            if (progress >= 0) {
+                currentProgress = progress;
+                console.log('从拖拽位置开始移动，进度:', currentProgress);
+            }
+        }
         
         function move(timestamp) {
             if (!startTime) startTime = timestamp;
@@ -1011,19 +1067,31 @@
                 if (svgElement) {
                     const svgRect = svgElement.getBoundingClientRect();
                     
-                    // 计算小人在地图中的绝对位置（不受地图拖拽影响）
-                    // 调整偏移量以更精确地匹配小人的视觉位置
-                    const mapX = point.x + svgRect.left - mapRect.left - 20; // 小人宽度的一半是20px，居中显示
-                    const mapY = point.y + svgRect.top - mapRect.top - 45; // 增加垂直偏移量，确保小人脚准确地踩在线上
+                    // 修复计算逻辑，确保小人准确沿着路线行走
+                    const mapX = point.x + svgRect.left - mapRect.left - 20; // 减去小人宽度的一半使其居中
+                    const mapY = point.y + svgRect.top - mapRect.top - 28; // 调整垂直位置，确保脚踩在线上
+                    
+                    // 确保位置在合理范围内，防止小人消失
+                    const containerWidth = mapContainer.offsetWidth;
+                    const containerHeight = mapContainer.offsetHeight;
+                    const soldierWidth = 40;
+                    const soldierHeight = 60;
+                    
+                    // 限制小人在地图容器内
+                    const safeX = Math.max(0, Math.min(mapX, containerWidth - soldierWidth));
+                    const safeY = Math.max(0, Math.min(mapY, containerHeight - soldierHeight));
                     
                     // 设置小人位置（相对于地图容器）
                     soldier.style.position = 'absolute';
-                    soldier.style.left = mapX + 'px';
-                    soldier.style.top = mapY + 'px';
+                    soldier.style.left = safeX + 'px';
+                    soldier.style.top = safeY + 'px';
                     soldier.style.bottom = 'auto';
                     
                     // 确保小人始终显示在地图上方
                     soldier.style.zIndex = '999';
+                    
+                    // 确保小人元素是可见的
+                    soldier.style.display = 'block';
                 }
                 
                 // 确保动画持续进行
@@ -1041,6 +1109,15 @@
                 // 移动到下一站
                 currentNodeIndex = Math.min(currentNodeIndex + 1, totalNodes - 1);
                 updateProgress(currentNodeIndex);
+                
+                // 检查是否到达终点
+                if (currentNodeIndex >= totalNodes - 1) {
+                    // 延迟3秒后返回界面左下方
+                    setTimeout(() => {
+                        // 重置位置到界面左下方
+                        resetSoldierPosition();
+                    }, 3000);
+                }
             }
         }
         
@@ -1053,6 +1130,35 @@
             move(Date.now());
         }
         console.log('开始沿路径移动小人，路径索引:', pathIndex);
+    }
+    
+    // 重置小人到界面左下方
+    function resetSoldierPosition() {
+        // 确保地图容器存在
+        const mapContainer = document.querySelector('.map-container, .folium-map') || document.querySelector('.folium-map');
+        if (!mapContainer) {
+            console.error('地图容器未找到');
+            return;
+        }
+        
+        // 停止任何行走动画
+        isWalking = false;
+        soldier.classList.remove('walking');
+        
+        // 重置到界面左下方，使用相对定位以避免受到地图缩放影响
+        soldier.style.position = 'absolute';
+        soldier.style.left = '60px';
+        soldier.style.bottom = '60px';
+        soldier.style.top = 'auto';
+        
+        // 确保小人可见
+        soldier.style.zIndex = '999';
+        soldier.style.display = 'block';
+        
+        // 重置路径索引
+        pathIndex = -1;
+        
+        console.log('小人已重置到界面左下方');
     }
         
         // 鼠标按下事件
@@ -1100,17 +1206,96 @@
                 isDragging = false;
                 soldier.classList.remove('dragging');
                 
-                // 检查是否在路线上
+                // 获取小人中心点坐标
                 const rect = soldier.getBoundingClientRect();
                 const x = rect.left + rect.width / 2;
                 const y = rect.top + rect.height / 2;
-                const newPathIndex = findPathIndex(x, y);
                 
-                if (newPathIndex !== -1 && newPathIndex !== pathIndex) {
-                    pathIndex = newPathIndex;
-                    // 沿路线移动
-                    moveAlongPath(pathIndex);
-                    playSoundEffect();
+                // 寻找所有路径中最近的点，无论是否在路径上
+                let closestPathIndex = -1;
+                let closestProgress = -1;
+                let minDistance = Infinity;
+                const paths = getPathElements();
+                
+                // 遍历所有路径找到最近的点
+                for (let i = 0; i < paths.length; i++) {
+                    const path = paths[i];
+                    const svgElement = path.closest('svg');
+                    if (!svgElement) continue;
+                    
+                    try {
+                        const point = svgElement.createSVGPoint();
+                        point.x = x;
+                        point.y = y;
+                        
+                        const transformedPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
+                        const pathLength = path.getTotalLength();
+                        let pathMinDistance = Infinity;
+                        let closestPointIndex = 0;
+                        
+                        // 在路径上采样更多点以找到最近点
+                        for (let j = 0; j <= pathLength; j += 2) { // 增加采样密度
+                            const pathPoint = path.getPointAtLength(j);
+                            const distance = Math.sqrt(
+                                Math.pow(transformedPoint.x - pathPoint.x, 2) + 
+                                Math.pow(transformedPoint.y - pathPoint.y, 2)
+                            );
+                            
+                            if (distance < pathMinDistance) {
+                                pathMinDistance = distance;
+                                closestPointIndex = j;
+                            }
+                        }
+                        
+                        // 找到此路径上的最近点
+                        if (pathMinDistance < minDistance) {
+                            minDistance = pathMinDistance;
+                            closestPathIndex = i;
+                            closestProgress = closestPointIndex / pathLength;
+                        }
+                    } catch (error) {
+                        console.error('计算路径最近点出错:', error);
+                    }
+                }
+                
+                // 如果找到足够近的路径（距离阈值设为60像素）
+                if (closestPathIndex !== -1 && minDistance < 60) {
+                    pathIndex = closestPathIndex;
+                    
+                    // 获取对应的路径元素
+                    const path = paths[pathIndex];
+                    
+                    // 将小人位置转换为相对于地图容器的坐标
+                    const mapContainer = document.querySelector('.map-container, .folium-map') || document.querySelector('.folium-map');
+                    if (mapContainer) {
+                        const mapRect = mapContainer.getBoundingClientRect();
+                        const svgElement = path.closest('svg');
+                        
+                        if (svgElement) {
+                            const svgRect = svgElement.getBoundingClientRect();
+                            
+                            // 立即将小人定位到路径上的精确位置
+                            const point = path.getPointAtLength(closestProgress * path.getTotalLength());
+                            const mapX = point.x + svgRect.left - mapRect.left - 20;
+                            const mapY = point.y + svgRect.top - mapRect.top - 28;
+                            
+                            // 设置位置
+                            soldier.style.position = 'absolute';
+                            soldier.style.left = mapX + 'px';
+                            soldier.style.top = mapY + 'px';
+                            soldier.style.bottom = 'auto';
+                            soldier.style.zIndex = '999';
+                            soldier.style.display = 'block';
+                            
+                            // 从该位置开始沿路径移动
+                            moveAlongPath(pathIndex, 20000, {x: mapX + 20, y: mapY + 28});
+                            playSoundEffect();
+                        }
+                    }
+                } else {
+                    // 如果不在任何路线附近，确保小人不会消失
+                    soldier.style.display = 'block';
+                    soldier.style.zIndex = '999';
                 }
             }
         });
@@ -1157,14 +1342,14 @@
     }
 </script>
     
-            <div class="folium-map" id="map_7ec2be21692b6299b6279b416c2e10f5" ></div>
+            <div class="folium-map" id="map_1847de95be0bd1ebe87a3dd0366aead5" ></div>
         
 </body>
 <script>
     
     
-            var map_7ec2be21692b6299b6279b416c2e10f5 = L.map(
-                "map_7ec2be21692b6299b6279b416c2e10f5",
+            var map_1847de95be0bd1ebe87a3dd0366aead5 = L.map(
+                "map_1847de95be0bd1ebe87a3dd0366aead5",
                 {
                     center: [25.8856, 116.027],
                     crs: L.CRS.EPSG3857,
@@ -1176,13 +1361,13 @@
 
                 }
             );
-            L.control.scale().addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            L.control.scale().addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
 
             
 
         
     
-            var tile_layer_0b6e020efd023a876e930e5b5f564f27 = L.tileLayer(
+            var tile_layer_db4be76dac93890fd37dfe74b927defb = L.tileLayer(
                 "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                 {
   "minZoom": 0,
@@ -1199,33 +1384,33 @@
             );
         
     
-            tile_layer_0b6e020efd023a876e930e5b5f564f27.addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            tile_layer_db4be76dac93890fd37dfe74b927defb.addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var poly_line_3879eb8217e93bbae9ca10679b3b6ee2 = L.polyline(
+            var poly_line_c1b8d57330be3143bab4a45f9badfeb0 = L.polyline(
                 [[25.8856, 116.027], [25.925, 115.87], [25.9811, 115.4442], [25.9, 114.9], [25.6, 113.9], [26.0, 113.0], [26.5, 111.8], [27.1, 109.8], [27.7172, 106.9271], [27.8, 106.5], [28.0, 106.2], [28.2, 105.9], [28.4, 105.8], [28.5081, 105.7975], [28.3, 105.2], [27.9, 104.5], [27.5, 103.2], [27.1564, 100.2562], [27.5, 100.0], [28.0, 101.0], [28.8, 101.8], [29.4333, 102.2167], [29.6, 102.25], [29.9428, 102.2956], [30.1, 102.4], [30.5, 102.6], [31.0, 102.5], [31.3, 102.45], [31.5543, 102.4531], [31.8, 102.8], [32.0, 103.0], [32.3, 103.4], [32.6047, 103.6553], [33.0, 104.0], [33.5, 104.5], [34.0, 105.0], [34.5, 105.5], [35.0, 106.0], [35.5, 106.5], [36.0, 107.0], [36.5, 107.5], [36.92785, 108.17611]],
                 {"bubblingMouseEvents": true, "color": "#FFB6C1", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "#FFB6C1", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.9, "smoothFactor": 1.0, "stroke": true, "weight": 4}
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-        var popup_e768d03d2e1c1d90e70bc46b2bd73da8 = L.popup({
+        var popup_b5212822e9a6582cb2541d32288c86a1 = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_3193ce338f838ab4791ce3546d1c638c = $(`<div id="html_3193ce338f838ab4791ce3546d1c638c" style="width: 100.0%; height: 100.0%;">红军长征（1934-1935）：从瑞金到吴起镇，翻雪山过草地的真实路径</div>`)[0];
-                popup_e768d03d2e1c1d90e70bc46b2bd73da8.setContent(html_3193ce338f838ab4791ce3546d1c638c);
+                var html_df85880bd50d006e943f5bd7864cc84a = $(`<div id="html_df85880bd50d006e943f5bd7864cc84a" style="width: 100.0%; height: 100.0%;">红军长征（1934-1935）：从瑞金到吴起镇，翻雪山过草地的真实路径</div>`)[0];
+                popup_b5212822e9a6582cb2541d32288c86a1.setContent(html_df85880bd50d006e943f5bd7864cc84a);
             
         
 
-        poly_line_3879eb8217e93bbae9ca10679b3b6ee2.bindPopup(popup_e768d03d2e1c1d90e70bc46b2bd73da8)
+        poly_line_c1b8d57330be3143bab4a45f9badfeb0.bindPopup(popup_b5212822e9a6582cb2541d32288c86a1)
         ;
 
         
     
     
-            poly_line_3879eb8217e93bbae9ca10679b3b6ee2.bindTooltip(
+            poly_line_c1b8d57330be3143bab4a45f9badfeb0.bindTooltip(
                 `<div>
                      红军长征真实路线
                  </div>`,
@@ -1235,38 +1420,38 @@
             );
         
     
-            var marker_6bc1916b15d88edf73b9a5aa47dbade6 = L.marker(
+            var marker_697e73f898ecce6ff0c749b1ac886726 = L.marker(
                 [25.8856, 116.027],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_c61b40807dfac549ad3bde62851f89eb = L.divIcon({
+            var div_icon_200c2ba96f29fd7f443f1507e0fc4ea7 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e1\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_45ec97b771187a48b5bcec78f0cf58b9 = L.popup({
+        var popup_cb58f43f5494b526d1f030c0cf9b8f58 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_84d64c3f3e8f745f6bc275d93196fe53 = $(`<div id="html_84d64c3f3e8f745f6bc275d93196fe53" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>瑞金</strong><br>长征出发地<br><button onclick='openDetailsForNode(0)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_45ec97b771187a48b5bcec78f0cf58b9.setContent(html_84d64c3f3e8f745f6bc275d93196fe53);
+                var html_dd2c3d1e4128ee710ff794e91b13ed1a = $(`<div id="html_dd2c3d1e4128ee710ff794e91b13ed1a" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>瑞金</strong><br>长征出发地<br><button onclick='openDetailsForNode(0)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_cb58f43f5494b526d1f030c0cf9b8f58.setContent(html_dd2c3d1e4128ee710ff794e91b13ed1a);
             
         
 
-        marker_6bc1916b15d88edf73b9a5aa47dbade6.bindPopup(popup_45ec97b771187a48b5bcec78f0cf58b9)
+        marker_697e73f898ecce6ff0c749b1ac886726.bindPopup(popup_cb58f43f5494b526d1f030c0cf9b8f58)
         ;
 
         
     
     
-            marker_6bc1916b15d88edf73b9a5aa47dbade6.bindTooltip(
+            marker_697e73f898ecce6ff0c749b1ac886726.bindTooltip(
                 `<div>
                      1. 瑞金
                  </div>`,
@@ -1276,41 +1461,41 @@
             );
         
     
-                marker_6bc1916b15d88edf73b9a5aa47dbade6.setIcon(div_icon_c61b40807dfac549ad3bde62851f89eb);
+                marker_697e73f898ecce6ff0c749b1ac886726.setIcon(div_icon_200c2ba96f29fd7f443f1507e0fc4ea7);
             
     
-            var marker_a6630023094532bc72151ad27b549655 = L.marker(
+            var marker_9aa1fee5d34cd59f3d98f6969a02eef7 = L.marker(
                 [25.9811, 115.4442],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_42cf2c8775c2dfbb4a582eb09351bc63 = L.divIcon({
+            var div_icon_2c968a59948314e9f22d35b76b2de17b = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e2\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_074892958b7333e85eb04168415b6db4 = L.popup({
+        var popup_5c51ccb22ecc967b458d14715f2faaf6 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_d6f2220efb69f90b768edb0c847c776e = $(`<div id="html_d6f2220efb69f90b768edb0c847c776e" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>雩都</strong><br>于都河渡河<br><button onclick='openDetailsForNode(1)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_074892958b7333e85eb04168415b6db4.setContent(html_d6f2220efb69f90b768edb0c847c776e);
+                var html_4dd931dc9cced01af40477b6d8d8db5f = $(`<div id="html_4dd931dc9cced01af40477b6d8d8db5f" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>雩都</strong><br>于都河渡河<br><button onclick='openDetailsForNode(1)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_5c51ccb22ecc967b458d14715f2faaf6.setContent(html_4dd931dc9cced01af40477b6d8d8db5f);
             
         
 
-        marker_a6630023094532bc72151ad27b549655.bindPopup(popup_074892958b7333e85eb04168415b6db4)
+        marker_9aa1fee5d34cd59f3d98f6969a02eef7.bindPopup(popup_5c51ccb22ecc967b458d14715f2faaf6)
         ;
 
         
     
     
-            marker_a6630023094532bc72151ad27b549655.bindTooltip(
+            marker_9aa1fee5d34cd59f3d98f6969a02eef7.bindTooltip(
                 `<div>
                      2. 雩都
                  </div>`,
@@ -1320,41 +1505,41 @@
             );
         
     
-                marker_a6630023094532bc72151ad27b549655.setIcon(div_icon_42cf2c8775c2dfbb4a582eb09351bc63);
+                marker_9aa1fee5d34cd59f3d98f6969a02eef7.setIcon(div_icon_2c968a59948314e9f22d35b76b2de17b);
             
     
-            var marker_3cc9e641fedc0d7eafbe7ad588d2a952 = L.marker(
+            var marker_d1625438e86fba094710c0fee54cd8b0 = L.marker(
                 [27.7172, 106.9271],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_df79f4bdb096b20dd99eafcbd829b2be = L.divIcon({
+            var div_icon_d5ef82abd92cccd3175a2d2b2de754cf = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e3\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_d28b315b7153a6d37c19b7a3b6f72b33 = L.popup({
+        var popup_48942ed1e380eabc2caac37375381b5f = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_0a9fffcb78c7810b2e221848e4cac33b = $(`<div id="html_0a9fffcb78c7810b2e221848e4cac33b" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>遵义</strong><br>遵义会议召开地<br><button onclick='openDetailsForNode(2)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_d28b315b7153a6d37c19b7a3b6f72b33.setContent(html_0a9fffcb78c7810b2e221848e4cac33b);
+                var html_3cccda9357366990174675c836ad2994 = $(`<div id="html_3cccda9357366990174675c836ad2994" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>遵义</strong><br>遵义会议召开地<br><button onclick='openDetailsForNode(2)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_48942ed1e380eabc2caac37375381b5f.setContent(html_3cccda9357366990174675c836ad2994);
             
         
 
-        marker_3cc9e641fedc0d7eafbe7ad588d2a952.bindPopup(popup_d28b315b7153a6d37c19b7a3b6f72b33)
+        marker_d1625438e86fba094710c0fee54cd8b0.bindPopup(popup_48942ed1e380eabc2caac37375381b5f)
         ;
 
         
     
     
-            marker_3cc9e641fedc0d7eafbe7ad588d2a952.bindTooltip(
+            marker_d1625438e86fba094710c0fee54cd8b0.bindTooltip(
                 `<div>
                      3. 遵义
                  </div>`,
@@ -1364,41 +1549,41 @@
             );
         
     
-                marker_3cc9e641fedc0d7eafbe7ad588d2a952.setIcon(div_icon_df79f4bdb096b20dd99eafcbd829b2be);
+                marker_d1625438e86fba094710c0fee54cd8b0.setIcon(div_icon_d5ef82abd92cccd3175a2d2b2de754cf);
             
     
-            var marker_e09df2632aadb9a0fe785607682aa05c = L.marker(
+            var marker_25ef4829ba4324f369fe09b7017b80f3 = L.marker(
                 [28.5081, 105.7975],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_8c69bfeb737c52065d45b261d34c3205 = L.divIcon({
+            var div_icon_19b9a1a8a588dd343709d85b188c9fb0 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e4\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_d393af7d90200e8da529c399a89656a2 = L.popup({
+        var popup_fcd247be0222f61fa421a4d6597c302b = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_e1d0bf614dbbe3b34f3135e320a7b1d1 = $(`<div id="html_e1d0bf614dbbe3b34f3135e320a7b1d1" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>赤水</strong><br>四渡赤水<br><button onclick='openDetailsForNode(3)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_d393af7d90200e8da529c399a89656a2.setContent(html_e1d0bf614dbbe3b34f3135e320a7b1d1);
+                var html_ed1fb3ff139f317855b9b0d0376c616b = $(`<div id="html_ed1fb3ff139f317855b9b0d0376c616b" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>赤水</strong><br>四渡赤水<br><button onclick='openDetailsForNode(3)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_fcd247be0222f61fa421a4d6597c302b.setContent(html_ed1fb3ff139f317855b9b0d0376c616b);
             
         
 
-        marker_e09df2632aadb9a0fe785607682aa05c.bindPopup(popup_d393af7d90200e8da529c399a89656a2)
+        marker_25ef4829ba4324f369fe09b7017b80f3.bindPopup(popup_fcd247be0222f61fa421a4d6597c302b)
         ;
 
         
     
     
-            marker_e09df2632aadb9a0fe785607682aa05c.bindTooltip(
+            marker_25ef4829ba4324f369fe09b7017b80f3.bindTooltip(
                 `<div>
                      4. 赤水
                  </div>`,
@@ -1408,41 +1593,41 @@
             );
         
     
-                marker_e09df2632aadb9a0fe785607682aa05c.setIcon(div_icon_8c69bfeb737c52065d45b261d34c3205);
+                marker_25ef4829ba4324f369fe09b7017b80f3.setIcon(div_icon_19b9a1a8a588dd343709d85b188c9fb0);
             
     
-            var marker_a6f24e08a08bf556180193b45633c801 = L.marker(
+            var marker_d2a58adc859a922718973d147493afdb = L.marker(
                 [27.1564, 100.2562],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_7b42c1d7760b73b88fe77e51d5125527 = L.divIcon({
+            var div_icon_7b160293a8a2a1a3a45c5ca01ec5ffb4 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e5\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_8c7dcb73ae7b9c05226f24db79da5baa = L.popup({
+        var popup_c336edc0640fefe664c8d874a604105a = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_39f4d4bbcae3b8f3cb600eff35005b60 = $(`<div id="html_39f4d4bbcae3b8f3cb600eff35005b60" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>金沙江</strong><br>巧渡金沙江<br><button onclick='openDetailsForNode(4)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_8c7dcb73ae7b9c05226f24db79da5baa.setContent(html_39f4d4bbcae3b8f3cb600eff35005b60);
+                var html_af9f3c9b41165873c1738f4d1f068e3a = $(`<div id="html_af9f3c9b41165873c1738f4d1f068e3a" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>金沙江</strong><br>巧渡金沙江<br><button onclick='openDetailsForNode(4)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_c336edc0640fefe664c8d874a604105a.setContent(html_af9f3c9b41165873c1738f4d1f068e3a);
             
         
 
-        marker_a6f24e08a08bf556180193b45633c801.bindPopup(popup_8c7dcb73ae7b9c05226f24db79da5baa)
+        marker_d2a58adc859a922718973d147493afdb.bindPopup(popup_c336edc0640fefe664c8d874a604105a)
         ;
 
         
     
     
-            marker_a6f24e08a08bf556180193b45633c801.bindTooltip(
+            marker_d2a58adc859a922718973d147493afdb.bindTooltip(
                 `<div>
                      5. 金沙江
                  </div>`,
@@ -1452,41 +1637,41 @@
             );
         
     
-                marker_a6f24e08a08bf556180193b45633c801.setIcon(div_icon_7b42c1d7760b73b88fe77e51d5125527);
+                marker_d2a58adc859a922718973d147493afdb.setIcon(div_icon_7b160293a8a2a1a3a45c5ca01ec5ffb4);
             
     
-            var marker_c2fcf23d985ce5ef8f33a2d852695604 = L.marker(
+            var marker_85a2c7971ba3ebb846d809b010a552f7 = L.marker(
                 [29.4333, 102.2167],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_c8c36211383360e0c93d5f78ae35212d = L.divIcon({
+            var div_icon_4f10bfd15fbbe4136ad61628ce49b987 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e6\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_bd26c6f620a1e1774b26e9ed7b94ec0f = L.popup({
+        var popup_5692f4b804b544e59006dee9cc431113 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_001a81621d28c2ec70bb30810b2c9a4b = $(`<div id="html_001a81621d28c2ec70bb30810b2c9a4b" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>大渡河</strong><br>强渡大渡河<br><button onclick='openDetailsForNode(5)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_bd26c6f620a1e1774b26e9ed7b94ec0f.setContent(html_001a81621d28c2ec70bb30810b2c9a4b);
+                var html_6be85b2b7f05eccf3a8ba31de8dea810 = $(`<div id="html_6be85b2b7f05eccf3a8ba31de8dea810" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>大渡河</strong><br>强渡大渡河<br><button onclick='openDetailsForNode(5)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_5692f4b804b544e59006dee9cc431113.setContent(html_6be85b2b7f05eccf3a8ba31de8dea810);
             
         
 
-        marker_c2fcf23d985ce5ef8f33a2d852695604.bindPopup(popup_bd26c6f620a1e1774b26e9ed7b94ec0f)
+        marker_85a2c7971ba3ebb846d809b010a552f7.bindPopup(popup_5692f4b804b544e59006dee9cc431113)
         ;
 
         
     
     
-            marker_c2fcf23d985ce5ef8f33a2d852695604.bindTooltip(
+            marker_85a2c7971ba3ebb846d809b010a552f7.bindTooltip(
                 `<div>
                      6. 大渡河
                  </div>`,
@@ -1496,41 +1681,41 @@
             );
         
     
-                marker_c2fcf23d985ce5ef8f33a2d852695604.setIcon(div_icon_c8c36211383360e0c93d5f78ae35212d);
+                marker_85a2c7971ba3ebb846d809b010a552f7.setIcon(div_icon_4f10bfd15fbbe4136ad61628ce49b987);
             
     
-            var marker_3aba410441d49bb341eb26564497b459 = L.marker(
+            var marker_caefbe25bbf8215f4ebdfe2dcc702ee9 = L.marker(
                 [29.9428, 102.2956],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_8de8f0c69cacca47623ae92aa5d619d7 = L.divIcon({
+            var div_icon_7dd7c6229b048278b53d774b043694df = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e7\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_26c3dec136ab9abf69f23cd0c107b41a = L.popup({
+        var popup_c07921b9dc8a91515cddeb8980b5a4c6 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_6e366d5c21e9b2773e2a28ec5ef6f566 = $(`<div id="html_6e366d5c21e9b2773e2a28ec5ef6f566" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>泸定桥</strong><br>飞夺泸定桥<br><button onclick='openDetailsForNode(6)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_26c3dec136ab9abf69f23cd0c107b41a.setContent(html_6e366d5c21e9b2773e2a28ec5ef6f566);
+                var html_06aeec17b1650dbed25c96b99cbf3093 = $(`<div id="html_06aeec17b1650dbed25c96b99cbf3093" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>泸定桥</strong><br>飞夺泸定桥<br><button onclick='openDetailsForNode(6)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_c07921b9dc8a91515cddeb8980b5a4c6.setContent(html_06aeec17b1650dbed25c96b99cbf3093);
             
         
 
-        marker_3aba410441d49bb341eb26564497b459.bindPopup(popup_26c3dec136ab9abf69f23cd0c107b41a)
+        marker_caefbe25bbf8215f4ebdfe2dcc702ee9.bindPopup(popup_c07921b9dc8a91515cddeb8980b5a4c6)
         ;
 
         
     
     
-            marker_3aba410441d49bb341eb26564497b459.bindTooltip(
+            marker_caefbe25bbf8215f4ebdfe2dcc702ee9.bindTooltip(
                 `<div>
                      7. 泸定桥
                  </div>`,
@@ -1540,41 +1725,41 @@
             );
         
     
-                marker_3aba410441d49bb341eb26564497b459.setIcon(div_icon_8de8f0c69cacca47623ae92aa5d619d7);
+                marker_caefbe25bbf8215f4ebdfe2dcc702ee9.setIcon(div_icon_7dd7c6229b048278b53d774b043694df);
             
     
-            var marker_32d5f01de9181b4b214b628f80464172 = L.marker(
+            var marker_28c9679359d62bd2c0eb2d57cab9c704 = L.marker(
                 [30.5, 102.6],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_2dbcc05c5d85d8fbef5232dc39b3d2f8 = L.divIcon({
+            var div_icon_3614beb72aa579d1b4df582050c81921 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e8\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_5bf0124700e981f6e8bb75b64fe7eab0 = L.popup({
+        var popup_2cca6f7d266620362c0236dabd2e75a2 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_2d10dbb0621e07d52294a72dc1899195 = $(`<div id="html_2d10dbb0621e07d52294a72dc1899195" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>夹金山</strong><br>翻越夹金山<br><button onclick='openDetailsForNode(7)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_5bf0124700e981f6e8bb75b64fe7eab0.setContent(html_2d10dbb0621e07d52294a72dc1899195);
+                var html_a22fc87042e268cd2e086cc0759c757c = $(`<div id="html_a22fc87042e268cd2e086cc0759c757c" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>夹金山</strong><br>翻越夹金山<br><button onclick='openDetailsForNode(7)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_2cca6f7d266620362c0236dabd2e75a2.setContent(html_a22fc87042e268cd2e086cc0759c757c);
             
         
 
-        marker_32d5f01de9181b4b214b628f80464172.bindPopup(popup_5bf0124700e981f6e8bb75b64fe7eab0)
+        marker_28c9679359d62bd2c0eb2d57cab9c704.bindPopup(popup_2cca6f7d266620362c0236dabd2e75a2)
         ;
 
         
     
     
-            marker_32d5f01de9181b4b214b628f80464172.bindTooltip(
+            marker_28c9679359d62bd2c0eb2d57cab9c704.bindTooltip(
                 `<div>
                      8. 夹金山
                  </div>`,
@@ -1584,41 +1769,41 @@
             );
         
     
-                marker_32d5f01de9181b4b214b628f80464172.setIcon(div_icon_2dbcc05c5d85d8fbef5232dc39b3d2f8);
+                marker_28c9679359d62bd2c0eb2d57cab9c704.setIcon(div_icon_3614beb72aa579d1b4df582050c81921);
             
     
-            var marker_6cc6372379be8a04cd94b7bf36999402 = L.marker(
+            var marker_f2e5ad15d2ce89d1d059fbafa368fe00 = L.marker(
                 [31.5543, 102.4531],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_682942acba998532c9401fefe21e6a13 = L.divIcon({
+            var div_icon_685463fa5d813390831a830da30d7a60 = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e9\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_b064a4a67d9fddc8529822fcc287e2bd = L.popup({
+        var popup_81726c2640e910cee5f1e9cc45a79742 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_5653d1ea06977696ec7b313b5a2078c4 = $(`<div id="html_5653d1ea06977696ec7b313b5a2078c4" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>懋功</strong><br>与红四方面军会师<br><button onclick='openDetailsForNode(8)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_b064a4a67d9fddc8529822fcc287e2bd.setContent(html_5653d1ea06977696ec7b313b5a2078c4);
+                var html_de1118615f586f45ea5d9041b7966d77 = $(`<div id="html_de1118615f586f45ea5d9041b7966d77" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>懋功</strong><br>与红四方面军会师<br><button onclick='openDetailsForNode(8)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_81726c2640e910cee5f1e9cc45a79742.setContent(html_de1118615f586f45ea5d9041b7966d77);
             
         
 
-        marker_6cc6372379be8a04cd94b7bf36999402.bindPopup(popup_b064a4a67d9fddc8529822fcc287e2bd)
+        marker_f2e5ad15d2ce89d1d059fbafa368fe00.bindPopup(popup_81726c2640e910cee5f1e9cc45a79742)
         ;
 
         
     
     
-            marker_6cc6372379be8a04cd94b7bf36999402.bindTooltip(
+            marker_f2e5ad15d2ce89d1d059fbafa368fe00.bindTooltip(
                 `<div>
                      9. 懋功
                  </div>`,
@@ -1628,41 +1813,41 @@
             );
         
     
-                marker_6cc6372379be8a04cd94b7bf36999402.setIcon(div_icon_682942acba998532c9401fefe21e6a13);
+                marker_f2e5ad15d2ce89d1d059fbafa368fe00.setIcon(div_icon_685463fa5d813390831a830da30d7a60);
             
     
-            var marker_00788b250d3d5e42dd7449939725f3d4 = L.marker(
+            var marker_c94c939cc441828232b51951a8200b96 = L.marker(
                 [32.6047, 103.6553],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_ead3b5227c862474b46d32d44555fea1 = L.divIcon({
+            var div_icon_ea55d0f18a06958862120ac11cc83c0a = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e10\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_877012c3f6737b4806a2f1f88ddc4a5d = L.popup({
+        var popup_4d432b334cc0b4c7bf72a00c90be627e = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_59f0d3067f1c6ffa95f5c179e600679d = $(`<div id="html_59f0d3067f1c6ffa95f5c179e600679d" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>松潘草地</strong><br>过草地<br><button onclick='openDetailsForNode(9)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_877012c3f6737b4806a2f1f88ddc4a5d.setContent(html_59f0d3067f1c6ffa95f5c179e600679d);
+                var html_8d1573578b5f42a6b5cd31143d2982ee = $(`<div id="html_8d1573578b5f42a6b5cd31143d2982ee" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>松潘草地</strong><br>过草地<br><button onclick='openDetailsForNode(9)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_4d432b334cc0b4c7bf72a00c90be627e.setContent(html_8d1573578b5f42a6b5cd31143d2982ee);
             
         
 
-        marker_00788b250d3d5e42dd7449939725f3d4.bindPopup(popup_877012c3f6737b4806a2f1f88ddc4a5d)
+        marker_c94c939cc441828232b51951a8200b96.bindPopup(popup_4d432b334cc0b4c7bf72a00c90be627e)
         ;
 
         
     
     
-            marker_00788b250d3d5e42dd7449939725f3d4.bindTooltip(
+            marker_c94c939cc441828232b51951a8200b96.bindTooltip(
                 `<div>
                      10. 松潘草地
                  </div>`,
@@ -1672,41 +1857,41 @@
             );
         
     
-                marker_00788b250d3d5e42dd7449939725f3d4.setIcon(div_icon_ead3b5227c862474b46d32d44555fea1);
+                marker_c94c939cc441828232b51951a8200b96.setIcon(div_icon_ea55d0f18a06958862120ac11cc83c0a);
             
     
-            var marker_53af75a088a1ecc0a76ec59836ff813a = L.marker(
+            var marker_93a90a6cfbd44d047ffd4ae4d4977aeb = L.marker(
                 [36.92785, 108.17611],
                 {
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
         
     
-            var div_icon_6d2ba3180a97c4b57f2e33ed9f2ab3ce = L.divIcon({
+            var div_icon_362a57e074392f8f4996109d5eaf46ab = L.divIcon({
   "html": "\n    \u003cdiv style=\"text-align: center;\"\u003e\n        \u003cdiv style=\"\n            position: relative;\n            width: 40px;\n            height: 40px;\n            margin: 0 auto;\n        \"\u003e\n            \u003c!-- \u81ea\u5b9a\u4e49\u56fe\u6807 --\u003e\n            \u003cdiv style=\"\n                background-color: #d32f2f;\n                color: white;\n                width: 40px;\n                height: 40px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-size: 24px;\n                box-shadow: 0 0 10px rgba(211, 47, 47, 0.7);\n            \"\u003e\ud83c\udfee\u003c/div\u003e\n            \u003c!-- \u53f3\u4e0a\u89d2\u6570\u5b57 --\u003e\n            \u003cdiv style=\"\n                position: absolute;\n                top: -5px;\n                right: -5px;\n                background-color: #ffd700;\n                color: #d32f2f;\n                width: 20px;\n                height: 20px;\n                border-radius: 50%;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                font-weight: bold;\n                font-size: 12px;\n                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);\n            \"\u003e11\u003c/div\u003e\n        \u003c/div\u003e\n        \u003c!-- \u5220\u9664\u56fe\u6807\u4e0b\u65b9\u7684\u540d\u79f0\u6587\u672c --\u003e\n    \u003c/div\u003e",
   "className": "empty",
 });
         
     
-        var popup_45d2692c00d82880b9e63cb0f38a107a = L.popup({
+        var popup_3a7fb58ff09eb54e4fa00d9fdff3c435 = L.popup({
   "maxWidth": 300,
   "minWidth": 200,
 });
 
         
             
-                var html_b83fdb549ea48336039a93419341c076 = $(`<div id="html_b83fdb549ea48336039a93419341c076" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>吴起镇</strong><br>长征终点<br><button onclick='openDetailsForNode(10)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
-                popup_45d2692c00d82880b9e63cb0f38a107a.setContent(html_b83fdb549ea48336039a93419341c076);
+                var html_a0f1c74d2392bd7ef683f004786d6467 = $(`<div id="html_a0f1c74d2392bd7ef683f004786d6467" style="width: 100.0%; height: 100.0%;"><div style='font-size: 14px;'><strong>吴起镇</strong><br>长征终点<br><button onclick='openDetailsForNode(10)' style='margin-top: 10px; padding: 5px 10px; background-color: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;'>查看更多</button></div></div>`)[0];
+                popup_3a7fb58ff09eb54e4fa00d9fdff3c435.setContent(html_a0f1c74d2392bd7ef683f004786d6467);
             
         
 
-        marker_53af75a088a1ecc0a76ec59836ff813a.bindPopup(popup_45d2692c00d82880b9e63cb0f38a107a)
+        marker_93a90a6cfbd44d047ffd4ae4d4977aeb.bindPopup(popup_3a7fb58ff09eb54e4fa00d9fdff3c435)
         ;
 
         
     
     
-            marker_53af75a088a1ecc0a76ec59836ff813a.bindTooltip(
+            marker_93a90a6cfbd44d047ffd4ae4d4977aeb.bindTooltip(
                 `<div>
                      11. 吴起镇
                  </div>`,
@@ -1716,25 +1901,25 @@
             );
         
     
-                marker_53af75a088a1ecc0a76ec59836ff813a.setIcon(div_icon_6d2ba3180a97c4b57f2e33ed9f2ab3ce);
+                marker_93a90a6cfbd44d047ffd4ae4d4977aeb.setIcon(div_icon_362a57e074392f8f4996109d5eaf46ab);
             
     
-            var layer_control_6ae1db0e3c48c009815db35cdd9595fd_layers = {
+            var layer_control_97da48e6720aee56e83bfb4deee575b0_layers = {
                 base_layers : {
-                    "openstreetmap" : tile_layer_0b6e020efd023a876e930e5b5f564f27,
+                    "openstreetmap" : tile_layer_db4be76dac93890fd37dfe74b927defb,
                 },
                 overlays :  {
                 },
             };
-            let layer_control_6ae1db0e3c48c009815db35cdd9595fd = L.control.layers(
-                layer_control_6ae1db0e3c48c009815db35cdd9595fd_layers.base_layers,
-                layer_control_6ae1db0e3c48c009815db35cdd9595fd_layers.overlays,
+            let layer_control_97da48e6720aee56e83bfb4deee575b0 = L.control.layers(
+                layer_control_97da48e6720aee56e83bfb4deee575b0_layers.base_layers,
+                layer_control_97da48e6720aee56e83bfb4deee575b0_layers.overlays,
                 {
   "position": "topright",
   "collapsed": true,
   "autoZIndex": true,
 }
-            ).addTo(map_7ec2be21692b6299b6279b416c2e10f5);
+            ).addTo(map_1847de95be0bd1ebe87a3dd0366aead5);
 
         
 </script>
